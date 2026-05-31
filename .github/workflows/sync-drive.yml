@@ -23,12 +23,7 @@ jobs:
           DRIVE_FOLDER_ID: 1nNtCyrJ0uWSMmQwcOMhr6eYDV6vmVmRn
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-        run: |
-          if [ -z "$GOOGLE_API_KEY" ] && [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
-            echo "Skipping Drive sync because no Google Drive secret is configured."
-            exit 0
-          fi
-          node scripts/sync-drive-manifest.mjs
+        run: node scripts/sync-drive-manifest.mjs
       - name: Commit manifest changes
         run: |
           if git diff --quiet public/drive-manifest.json; then

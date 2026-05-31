@@ -337,10 +337,13 @@ async function fetchLiveDriveManifest() {
 }
 
 function normalizeManifest(manifest) {
-  const root = manifest.root || {
-    id: CONFIG.rootFolderId || DRIVE_ROOT_ID,
-    name: "Google Drive",
-    url: `https://drive.google.com/drive/folders/${CONFIG.rootFolderId || DRIVE_ROOT_ID}`
+  const rawRoot = manifest.root || {};
+  const rootId = rawRoot.id || CONFIG.rootFolderId || DRIVE_ROOT_ID;
+  const root = {
+    id: rootId,
+    name: rawRoot.name || "Google Drive",
+    url: rawRoot.url || rawRoot.webViewLink || driveFolderUrl(rootId),
+    embedUrl: rawRoot.embedUrl || driveEmbeddedFolderUrl(rootId)
   };
 
   const folders = [
@@ -361,7 +364,9 @@ function normalizeManifest(manifest) {
         parentId: folder.parentId || root.id,
         path: folder.path || folder.name || folder.title || "Untitled folder",
         createdTime: folder.createdTime || folder.created_time || manifest.generatedAt,
-        modifiedTime: folder.modifiedTime || folder.modified_time || folder.createdTime || manifest.generatedAt
+        modifiedTime: folder.modifiedTime || folder.modified_time || folder.createdTime || manifest.generatedAt,
+        url: folder.url || folder.webViewLink || driveFolderUrl(folder.id),
+        embedUrl: folder.embedUrl || driveEmbeddedFolderUrl(folder.id)
       }))
   ];
 
@@ -608,7 +613,37 @@ function renderGallery() {
   els.galleryGrid.innerHTML = visible.map(mediaCardHtml).join("");
   hydrateIconsIn(els.galleryGrid);
   wireImageFallbacks(els.galleryGrid);
-  els.emptyState.hidden = items.length > 0;
+  renderEmptyState(items);
+}
+
+function renderEmptyState(items) {
+  if (items.length > 0) {
+    els.emptyState.hidden = true;
+    els.emptyState.classList.remove("has-drive-frame");
+    return;
+  }
+
+  const selectedFolder = getSelectedFolder();
+  const folder = selectedFolder || state.manifest.root;
+  const canShowDriveFrame = !state.query && folder?.id;
+
+  els.emptyState.hidden = false;
+  els.emptyState.classList.toggle("has-drive-frame", canShowDriveFrame);
+  els.emptyState.innerHTML = `
+    <span data-icon="${canShowDriveFrame ? "folders" : "image"}"></span>
+    <strong>${canShowDriveFrame ? "Open the live Drive folder" : "No media found"}</strong>
+    <p>${canShowDriveFrame ? "This folder may have new files that are not in the local index yet." : "Try another folder or search term."}</p>
+    ${
+      canShowDriveFrame
+        ? `<a class="primary-action empty-drive-link" href="${escapeAttr(folder.url || driveFolderUrl(folder.id))}" target="_blank" rel="noreferrer">
+            <span data-icon="external"></span>
+            <span>Open in Drive</span>
+          </a>
+          <iframe class="drive-folder-frame" src="${escapeAttr(folder.embedUrl || driveEmbeddedFolderUrl(folder.id))}" title="${escapeAttr(folder.name || "Google Drive folder")}" loading="lazy"></iframe>`
+        : ""
+    }
+  `;
+  hydrateIconsIn(els.emptyState);
 }
 
 function getFilteredItems() {
@@ -651,17 +686,19 @@ function sortItems(items, sortMode) {
 function mediaCardHtml(item, index) {
   const shapeClass = mediaShapeClass(item, index);
   const typeIcon = item.type === "video" ? "video" : "image";
+  const typeLabel = item.type === "video" ? "Video" : "Photo";
+  const fallbackLabel = item.type === "video" ? "Play video" : "Drive preview";
   return `
-    <article class="media-card ${shapeClass}">
+    <article class="media-card ${shapeClass} ${item.type === "video" ? "is-video" : ""}">
       <button class="media-button is-loading" type="button" data-item-id="${escapeAttr(item.id)}" aria-label="${escapeAttr(item.name)}">
         <img src="${escapeAttr(item.thumbnailUrl)}" data-fallback-src="${escapeAttr(item.thumbnailFallbackUrl)}" alt="${escapeAttr(item.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
         <span class="media-fallback" aria-hidden="true">
           <span data-icon="${typeIcon}"></span>
-          <strong>Drive preview</strong>
+          <strong>${fallbackLabel}</strong>
         </span>
         <span class="media-overlay">
           <span class="media-name">${escapeHtml(item.name)}</span>
-          <span class="media-type"><span data-icon="${typeIcon}"></span>${item.type === "video" ? "Video" : "Photo"}</span>
+          <span class="media-type"><span data-icon="${typeIcon}"></span>${typeLabel}</span>
         </span>
       </button>
     </article>
@@ -739,12 +776,7 @@ function renderLightbox() {
 
   els.lightboxStage.innerHTML = "";
   if (item.type === "video") {
-    const iframe = document.createElement("iframe");
-    iframe.src = item.previewUrl;
-    iframe.title = item.name;
-    iframe.allow = "autoplay; encrypted-media; picture-in-picture";
-    iframe.allowFullscreen = true;
-    els.lightboxStage.appendChild(iframe);
+    renderDrivePreviewFrame(item, "Open video in Drive");
   } else {
     const image = document.createElement("img");
     image.src = item.fullUrl;
@@ -772,14 +804,24 @@ function renderLightbox() {
   }
 }
 
-function renderDrivePreviewFrame(item) {
+function renderDrivePreviewFrame(item, fallbackText = "Open in Google Drive") {
   els.lightboxStage.innerHTML = "";
+  const shell = document.createElement("div");
+  shell.className = "drive-preview-shell";
   const iframe = document.createElement("iframe");
   iframe.src = item.previewUrl;
   iframe.title = item.name;
-  iframe.allow = "autoplay; encrypted-media; picture-in-picture";
+  iframe.allow = "autoplay; fullscreen; encrypted-media; picture-in-picture";
   iframe.allowFullscreen = true;
-  els.lightboxStage.appendChild(iframe);
+  iframe.referrerPolicy = "no-referrer";
+  const link = document.createElement("a");
+  link.href = item.viewUrl;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.className = "drive-preview-link";
+  link.textContent = fallbackText;
+  shell.append(iframe, link);
+  els.lightboxStage.appendChild(shell);
 }
 
 function fitLightboxImage(image) {
@@ -934,6 +976,14 @@ function driveGoogleusercontentUrl(fileId, width) {
 
 function drivePreviewUrl(fileId) {
   return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+}
+
+function driveFolderUrl(folderId) {
+  return `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`;
+}
+
+function driveEmbeddedFolderUrl(folderId) {
+  return `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folderId)}#grid`;
 }
 
 function getTime(value) {

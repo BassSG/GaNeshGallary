@@ -23,7 +23,9 @@ Open `http://localhost:4173`.
 
 ## Google Drive Sync
 
-The app ships with `public/drive-manifest.json` so the site opens immediately. For automatic updates when files are added to Google Drive, configure one of these repository secrets:
+The app ships with `public/drive-manifest.json` so the site opens immediately. The scheduled workflow can sync public Drive folders without secrets by reading Google Drive's embedded folder view.
+
+If the folder is later made private, configure one of these repository secrets:
 
 - `GOOGLE_API_KEY`: works when the Drive folder and media are publicly readable or shared in a way the API key can read.
 - `GOOGLE_SERVICE_ACCOUNT_JSON`: recommended for controlled access. Share the Drive root folder with the service account email, then store the full service account JSON as this secret.
