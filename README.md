@@ -7,6 +7,8 @@ GaNeshPicture27 is a premium installable gallery PWA for browsing media from a G
 - Static PWA that can be installed on desktop and mobile.
 - Folder-based browsing that mirrors the Google Drive folder tree.
 - Image and video support.
+- Upload photos and videos to a Google Drive folder named `Upload` when Google OAuth is configured.
+- Download button in the media lightbox.
 - Date and time sorting, search, responsive layouts, and lazy loading.
 - GitHub Actions deployment to GitHub Pages.
 - Optional scheduled Google Drive manifest sync.
@@ -34,6 +36,23 @@ The scheduled workflow `.github/workflows/sync-drive.yml` runs every 30 minutes 
 
 For live browser-side sync, copy `drive-config.example.js` to `drive-config.js`, add a restricted public Drive API key, and set `preferLive: true`.
 
+## Google Drive Upload
+
+The upload button uses Google OAuth in the browser. Add a Web OAuth Client ID to `drive-config.js`:
+
+```js
+googleClientId: "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+```
+
+Authorized JavaScript origins should include:
+
+```text
+https://basssg.github.io
+http://localhost:4173
+```
+
+When the user chooses files, the app signs in with Google, finds or creates a folder named `Upload` inside the Drive root folder, uploads the selected photos/videos there, and immediately shows them in the app. If `googleClientId` is blank, the button opens the Drive folder as a fallback.
+
 ## Deployment
 
 The workflow `.github/workflows/pages.yml` deploys the static app to GitHub Pages on every push to `main`. The expected Pages URL is:
@@ -59,4 +78,6 @@ Then verify:
 - Search and sort update the grid.
 - Folder selection shows only the chosen folder and its descendants.
 - Lightbox opens images and Drive video previews.
+- Upload button signs in, creates/uses `Upload`, and adds uploaded media to the visible gallery.
+- Lightbox download button opens the Drive download URL for the selected media.
 - Browser install prompt is available when served from HTTPS or localhost.

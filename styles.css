@@ -138,6 +138,15 @@ button {
   box-shadow: 0 16px 34px rgba(242, 189, 61, 0.18);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .primary-action:disabled {
   cursor: default;
   opacity: 0.62;
@@ -146,6 +155,10 @@ button {
 .install-top-action {
   min-width: 134px;
   padding: 0 18px;
+}
+
+.upload-top-action {
+  min-width: 112px;
 }
 
 .section-heading {
@@ -527,6 +540,25 @@ button {
   color: var(--muted);
   font-size: 13px;
   text-align: right;
+}
+
+.gallery-header .upload-status {
+  grid-column: 1 / -1;
+  justify-self: end;
+  max-width: min(680px, 100%);
+  margin-top: 2px;
+  padding: 9px 12px;
+  border: 1px solid rgba(66, 214, 190, 0.24);
+  border-radius: var(--radius);
+  background: rgba(66, 214, 190, 0.08);
+  color: #9ee7dc;
+  text-align: left;
+}
+
+.gallery-header .upload-status.is-error {
+  border-color: rgba(242, 189, 61, 0.34);
+  background: rgba(242, 189, 61, 0.08);
+  color: #f7d88a;
 }
 
 .gallery-grid {
@@ -951,6 +983,12 @@ button {
     grid-row: 3;
   }
 
+  .upload-top-action {
+    grid-column: 1 / -1;
+    grid-row: 4;
+    width: 100%;
+  }
+
   .install-top-action {
     display: none;
   }
@@ -1005,6 +1043,11 @@ button {
   .gallery-header p {
     margin-top: 6px;
     text-align: left;
+  }
+
+  .gallery-header .upload-status {
+    justify-self: stretch;
+    margin-top: 10px;
   }
 
   .gallery-grid {

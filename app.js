@@ -1,6 +1,9 @@
 const DRIVE_ROOT_ID = "1nNtCyrJ0uWSMmQwcOMhr6eYDV6vmVmRn";
 const CONFIG = window.GANESH_DRIVE_CONFIG || {};
 const MEDIA_BATCH_SIZE = 36;
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+const UPLOAD_FOLDER_NAME = CONFIG.uploadFolderName || "Upload";
+const GOOGLE_DRIVE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive";
 
 const state = {
   manifest: null,
@@ -11,7 +14,9 @@ const state = {
   visibleLimit: MEDIA_BATCH_SIZE,
   currentItems: [],
   activeItemId: null,
-  deferredInstallPrompt: null
+  deferredInstallPrompt: null,
+  uploadAccessToken: "",
+  uploadTokenClient: null
 };
 
 const els = {};
@@ -31,6 +36,7 @@ const ICONS = {
   sort: '<svg viewBox="0 0 24 24" fill="none"><path d="M7 4v16"/><path d="m3 8 4-4 4 4"/><path d="M17 20V4"/><path d="m21 16-4 4-4-4"/></svg>',
   archive: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16"/><path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><path d="M9 11h6"/><path d="M8 3h8l2 4H6Z"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="none"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z"/></svg>',
+  upload: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/><path d="M5 21h14"/></svg>',
   video: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3Z"/></svg>'
 };
 
@@ -73,6 +79,9 @@ function cacheElements() {
     "onlineLabel",
     "generatedLabel",
     "installButton",
+    "uploadButton",
+    "uploadInput",
+    "uploadStatus",
     "openFoldersButton",
     "scrim",
     "breadcrumb",
@@ -98,6 +107,7 @@ function cacheElements() {
     "lightboxFolder",
     "lightboxTitle",
     "openDriveLink",
+    "downloadDriveLink",
     "closeLightboxButton",
     "lightboxStage",
     "previousButton",
@@ -164,6 +174,11 @@ function bindEvents() {
   });
 
   els.refreshButton.addEventListener("click", () => loadData({ forceLive: true, bustCache: true }));
+  els.uploadButton.addEventListener("click", () => {
+    els.uploadInput.value = "";
+    els.uploadInput.click();
+  });
+  els.uploadInput.addEventListener("change", (event) => uploadSelectedFiles(Array.from(event.target.files || [])));
 
   els.openFoldersButton.addEventListener("click", () => {
     document.body.classList.add("nav-open");
@@ -336,6 +351,245 @@ async function fetchLiveDriveManifest() {
   };
 }
 
+async function uploadSelectedFiles(files) {
+  const mediaFiles = files.filter(isSupportedUploadFile);
+  if (!mediaFiles.length) {
+    setUploadStatus("Choose photos or videos to upload.", true);
+    return;
+  }
+
+  if (!CONFIG.googleClientId) {
+    setUploadStatus("Google upload is not connected yet. Opening Drive folder.", true);
+    window.open(CONFIG.uploadFolderId ? driveFolderUrl(CONFIG.uploadFolderId) : driveFolderUrl(CONFIG.rootFolderId || DRIVE_ROOT_ID), "_blank", "noopener");
+    return;
+  }
+
+  try {
+    els.uploadButton.disabled = true;
+    setUploadStatus(`Preparing ${formatNumber(mediaFiles.length)} file${mediaFiles.length > 1 ? "s" : ""} for Upload.`);
+    const accessToken = await getUploadAccessToken();
+    const uploadFolder = await ensureUploadFolder(accessToken);
+    ensureUploadFolderInManifest(uploadFolder);
+
+    const uploadedItems = [];
+    for (let index = 0; index < mediaFiles.length; index += 1) {
+      const file = mediaFiles[index];
+      setUploadStatus(`Uploading ${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)}: ${file.name}`);
+      const uploadedFile = await uploadFileToDrive(file, uploadFolder.id, accessToken);
+      uploadedItems.push(addUploadedItemToManifest(uploadedFile, uploadFolder));
+    }
+
+    state.manifest.generatedAt = new Date().toISOString();
+    state.index = buildIndex(state.manifest);
+    state.selectedFolderId = uploadFolder.id;
+    state.visibleLimit = MEDIA_BATCH_SIZE;
+    renderAll();
+    setUploadStatus(`Uploaded ${formatNumber(uploadedItems.length)} file${uploadedItems.length > 1 ? "s" : ""} to ${uploadFolder.name}.`);
+  } catch (error) {
+    console.error(error);
+    setUploadStatus(error.message || "Upload failed. Please try again.", true);
+  } finally {
+    els.uploadButton.disabled = false;
+  }
+}
+
+async function getUploadAccessToken() {
+  await loadGoogleIdentityServices();
+
+  if (!state.uploadTokenClient) {
+    state.uploadTokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: CONFIG.googleClientId,
+      scope: GOOGLE_DRIVE_UPLOAD_SCOPE,
+      callback: () => {}
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    state.uploadTokenClient.callback = (response) => {
+      if (response.error) {
+        reject(new Error(response.error_description || response.error));
+        return;
+      }
+      state.uploadAccessToken = response.access_token;
+      resolve(response.access_token);
+    };
+    state.uploadTokenClient.requestAccessToken({ prompt: state.uploadAccessToken ? "" : "consent" });
+  });
+}
+
+function loadGoogleIdentityServices() {
+  if (window.google?.accounts?.oauth2) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Unable to load Google login.")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Unable to load Google login."));
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureUploadFolder(accessToken) {
+  const rootFolderId = CONFIG.rootFolderId || DRIVE_ROOT_ID;
+  const configuredFolderId = CONFIG.uploadFolderId || window.localStorage.getItem("ganeshUploadFolderId");
+
+  if (configuredFolderId) {
+    try {
+      const folder = await driveAuthorizedRequest(`files/${configuredFolderId}`, accessToken, {
+        fields: "id,name,mimeType,createdTime,modifiedTime,webViewLink"
+      });
+      if (folder.mimeType === DRIVE_FOLDER_MIME) {
+        return normalizeUploadFolder(folder);
+      }
+    } catch (error) {
+      console.warn("Stored upload folder could not be used", error);
+    }
+  }
+
+  const folder = await findUploadFolder(rootFolderId, accessToken) || (await createUploadFolder(rootFolderId, accessToken));
+  window.localStorage.setItem("ganeshUploadFolderId", folder.id);
+  return normalizeUploadFolder(folder);
+}
+
+async function findUploadFolder(rootFolderId, accessToken) {
+  const query = [
+    `mimeType = '${DRIVE_FOLDER_MIME}'`,
+    `name = '${escapeDriveQuery(UPLOAD_FOLDER_NAME)}'`,
+    `'${rootFolderId}' in parents`,
+    "trashed = false"
+  ].join(" and ");
+  const payload = await driveAuthorizedRequest("files", accessToken, {
+    q: query,
+    pageSize: "1",
+    fields: "files(id,name,mimeType,createdTime,modifiedTime,webViewLink)"
+  });
+  return payload.files?.[0] ? normalizeUploadFolder(payload.files[0]) : null;
+}
+
+async function createUploadFolder(rootFolderId, accessToken) {
+  const response = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: UPLOAD_FOLDER_NAME,
+      mimeType: DRIVE_FOLDER_MIME,
+      parents: [rootFolderId]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to create Upload folder: ${response.status}`);
+  }
+  return normalizeUploadFolder(await response.json());
+}
+
+async function uploadFileToDrive(file, folderId, accessToken) {
+  const boundary = `ganesh_upload_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const metadata = {
+    name: file.name,
+    mimeType: file.type || mimeFromFileName(file.name),
+    parents: [folderId]
+  };
+  const body = new Blob(
+    [
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+      `--${boundary}\r\nContent-Type: ${metadata.mimeType}\r\n\r\n`,
+      file,
+      `\r\n--${boundary}--`
+    ],
+    { type: `multipart/related; boundary=${boundary}` }
+  );
+
+  const response = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,imageMediaMetadata,videoMediaMetadata",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`
+      },
+      body
+    }
+  );
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Unable to upload ${file.name}: ${response.status} ${detail}`);
+  }
+  return response.json();
+}
+
+async function driveAuthorizedRequest(path, accessToken, params = {}) {
+  const queryParams = {
+    supportsAllDrives: "true",
+    ...params
+  };
+
+  if (path === "files") {
+    queryParams.includeItemsFromAllDrives = "true";
+  }
+
+  const query = new URLSearchParams(queryParams);
+  const response = await fetch(`https://www.googleapis.com/drive/v3/${path}?${query}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Google Drive request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+function normalizeUploadFolder(folder) {
+  return {
+    id: folder.id,
+    name: folder.name || UPLOAD_FOLDER_NAME,
+    parentId: CONFIG.rootFolderId || DRIVE_ROOT_ID,
+    path: `${state.manifest?.root?.name || "Google Drive"} / ${folder.name || UPLOAD_FOLDER_NAME}`,
+    createdTime: folder.createdTime || new Date().toISOString(),
+    modifiedTime: folder.modifiedTime || folder.createdTime || new Date().toISOString(),
+    url: folder.webViewLink || driveFolderUrl(folder.id),
+    embedUrl: driveEmbeddedFolderUrl(folder.id)
+  };
+}
+
+function ensureUploadFolderInManifest(folder) {
+  const existing = state.manifest.folders.find((candidate) => candidate.id === folder.id);
+  if (existing) {
+    Object.assign(existing, folder);
+    return existing;
+  }
+
+  state.manifest.folders.push(folder);
+  return folder;
+}
+
+function addUploadedItemToManifest(file, folder) {
+  const item = fileToItem(file, folder.id, [state.manifest.root.name, folder.name]);
+  const existingIndex = state.manifest.items.findIndex((candidate) => candidate.id === item.id);
+  if (existingIndex >= 0) {
+    state.manifest.items[existingIndex] = item;
+  } else {
+    state.manifest.items.unshift(item);
+  }
+  return item;
+}
+
 function normalizeManifest(manifest) {
   const rawRoot = manifest.root || {};
   const rootId = rawRoot.id || CONFIG.rootFolderId || DRIVE_ROOT_ID;
@@ -389,6 +643,7 @@ function normalizeManifest(manifest) {
       fullFallbackUrl: item.fullFallbackUrl || (type === "video" ? drivePreviewUrl(item.id) : driveGoogleusercontentUrl(item.id, 2400)),
       previewUrl: item.previewUrl || drivePreviewUrl(item.id),
       viewUrl: item.viewUrl || item.webViewLink || `https://drive.google.com/file/d/${item.id}/view`,
+      downloadUrl: item.downloadUrl || item.webContentLink || driveDownloadUrl(item.id),
       width: item.width || item.imageMediaMetadata?.width || item.videoMediaMetadata?.width || null,
       height: item.height || item.imageMediaMetadata?.height || item.videoMediaMetadata?.height || null
     };
@@ -421,6 +676,7 @@ function fileToItem(file, folderId, pathSegments) {
     fullFallbackUrl: type === "video" ? drivePreviewUrl(file.id) : driveGoogleusercontentUrl(file.id, 2400),
     previewUrl: drivePreviewUrl(file.id),
     viewUrl: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`,
+    downloadUrl: file.webContentLink || driveDownloadUrl(file.id),
     width: file.imageMediaMetadata?.width || file.videoMediaMetadata?.width || null,
     height: file.imageMediaMetadata?.height || file.videoMediaMetadata?.height || null
   };
@@ -771,6 +1027,9 @@ function renderLightbox() {
   els.lightboxTitle.textContent = item.name;
   els.lightboxMeta.textContent = `${formatDateTime(item.modifiedTime)} | ${item.type === "video" ? "Video" : "Photo"}`;
   els.openDriveLink.href = item.viewUrl;
+  els.downloadDriveLink.href = item.downloadUrl || driveDownloadUrl(item.id);
+  els.downloadDriveLink.setAttribute("download", item.name);
+  els.downloadDriveLink.setAttribute("aria-label", `Download ${item.name}`);
   els.previousButton.disabled = index <= 0;
   els.nextButton.disabled = index === -1 || index >= state.currentItems.length - 1;
 
@@ -847,6 +1106,16 @@ function closeLightbox() {
   state.activeItemId = null;
   els.lightboxStage.innerHTML = "";
   document.body.style.overflow = "";
+}
+
+function setUploadStatus(message, isError = false) {
+  if (!els.uploadStatus) {
+    return;
+  }
+
+  els.uploadStatus.hidden = !message;
+  els.uploadStatus.textContent = message;
+  els.uploadStatus.classList.toggle("is-error", isError);
 }
 
 function setupInfiniteLoading() {
@@ -966,6 +1235,29 @@ function isSupportedMedia(mimeType = "") {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/");
 }
 
+function isSupportedUploadFile(file) {
+  return isSupportedMedia(file.type) || /\.(jpe?g|png|gif|webp|heic|heif|mp4|mov|m4v|webm|3gp)$/i.test(file.name);
+}
+
+function mimeFromFileName(fileName) {
+  const extension = fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || "";
+  const mimeByExtension = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    heic: "image/heic",
+    heif: "image/heif",
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    m4v: "video/mp4",
+    webm: "video/webm",
+    "3gp": "video/3gpp"
+  };
+  return mimeByExtension[extension] || "application/octet-stream";
+}
+
 function driveThumbnailUrl(fileId, width) {
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${width}`;
 }
@@ -984,6 +1276,14 @@ function driveFolderUrl(folderId) {
 
 function driveEmbeddedFolderUrl(folderId) {
   return `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folderId)}#grid`;
+}
+
+function driveDownloadUrl(fileId) {
+  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`;
+}
+
+function escapeDriveQuery(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
 function getTime(value) {
