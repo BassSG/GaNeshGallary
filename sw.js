@@ -1,4 +1,4 @@
-const CACHE_NAME = "ganeshpicture27-shell-v5";
+const CACHE_NAME = "ganeshpicture27-shell-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -9,7 +9,11 @@ const APP_SHELL = [
   "./public/drive-manifest.json",
   "./public/icons/icon.svg",
   "./public/icons/icon-192.png",
-  "./public/icons/icon-512.png"
+  "./public/icons/icon-512.png",
+  "./public/icons/gallery-icon-192.png",
+  "./public/icons/gallery-icon-512.png",
+  "./public/icons/gallery-icon-maskable-192.png",
+  "./public/icons/gallery-icon-maskable-512.png"
 ];
 
 self.addEventListener("install", (event) => {

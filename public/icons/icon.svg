@@ -1,18 +1,55 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img">
   <defs>
-    <linearGradient id="bg" x1="76" y1="44" x2="430" y2="474" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#1b1d1a"/>
-      <stop offset="1" stop-color="#0f1110"/>
+    <linearGradient id="bg" x1="82" y1="40" x2="430" y2="472" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20252b"/>
+      <stop offset="1" stop-color="#0c1014"/>
     </linearGradient>
-    <linearGradient id="gold" x1="145" y1="116" x2="369" y2="398" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f3d37a"/>
-      <stop offset="1" stop-color="#bf8d24"/>
+    <linearGradient id="gold" x1="130" y1="68" x2="386" y2="448" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe39b"/>
+      <stop offset="1" stop-color="#b77918"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="82" y1="406" x2="430" y2="406" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#43d6be"/>
+      <stop offset="1" stop-color="#164f52"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="150" y1="184" x2="210" y2="352" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9bd7f5"/>
+      <stop offset=".6" stop-color="#0b8995"/>
+      <stop offset="1" stop-color="#093640"/>
+    </linearGradient>
+    <linearGradient id="sunset" x1="214" y1="124" x2="316" y2="348" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d7e3ed"/>
+      <stop offset=".52" stop-color="#e9b35f"/>
+      <stop offset="1" stop-color="#173947"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="116" fill="url(#bg)"/>
-  <circle cx="384" cy="132" r="34" fill="#2aa198"/>
-  <path fill="url(#gold)" d="M258 88c54 0 102 25 132 65 23 31 33 67 26 109-15 85-82 147-159 147-78 0-145-62-159-147-7-42 3-78 26-109 30-40 78-65 134-65Zm-78 161c12-31 42-51 77-51 36 0 66 20 79 51 4 10-1 21-11 25-10 4-21-1-25-11-7-17-24-27-43-27-18 0-35 10-42 27-4 10-15 15-25 11-10-4-15-15-10-25Zm28 75c27 28 72 28 99 0 8-8 20-8 28 0s8 20 0 28c-43 43-113 43-156 0-8-8-8-20 0-28s21-8 29 0Z"/>
-  <circle cx="199" cy="258" r="18" fill="#121312"/>
-  <circle cx="315" cy="258" r="18" fill="#121312"/>
-  <path d="M158 397h199" stroke="#f7f4ed" stroke-width="26" stroke-linecap="round" opacity=".9"/>
+  <rect x="58" y="50" width="396" height="406" rx="88" fill="none" stroke="url(#gold)" stroke-width="14"/>
+  <path d="M94 411c54 29 260 31 322 2" fill="none" stroke="url(#teal)" stroke-width="12" stroke-linecap="round"/>
+
+  <g transform="rotate(-14 183 270)">
+    <rect x="112" y="158" width="142" height="226" rx="24" fill="#f2eee4"/>
+    <rect x="123" y="171" width="120" height="200" rx="18" fill="url(#sea)"/>
+    <path d="M123 315c31-32 64-31 120-8v64H123z" fill="#082831" opacity=".85"/>
+    <path d="M123 269c29 9 61 5 120-21" fill="none" stroke="#f2e0af" stroke-width="7" opacity=".55"/>
+  </g>
+
+  <g transform="rotate(13 332 258)">
+    <rect x="266" y="154" width="136" height="220" rx="24" fill="#f2eee4"/>
+    <rect x="277" y="167" width="114" height="194" rx="18" fill="#1a2b28"/>
+    <path d="M277 235h114v126H277z" fill="#7f4d1d" opacity=".9"/>
+    <path d="M291 180c19 64 21 123 12 181M333 177c-20 69-18 127-2 184M371 181c-18 64-18 122-4 179" stroke="#f7cf7d" stroke-width="9" opacity=".36"/>
+  </g>
+
+  <g transform="rotate(-4 260 257)">
+    <rect x="177" y="112" width="166" height="292" rx="28" fill="#f7f2e9"/>
+    <rect x="190" y="127" width="140" height="262" rx="20" fill="url(#sunset)"/>
+    <circle cx="306" cy="226" r="18" fill="#ffd472"/>
+    <path d="M190 285l50-80 38 56 23-37 29 61v104H190z" fill="#17282c"/>
+    <path d="M238 205l40 56 23-37" fill="none" stroke="#ffe1a0" stroke-width="5" opacity=".4"/>
+  </g>
+
+  <circle cx="365" cy="352" r="72" fill="#111316" stroke="url(#gold)" stroke-width="11"/>
+  <circle cx="391" cy="326" r="13" fill="#ffe39b"/>
+  <path d="M314 378l36-45 28 37 18-22 29 30z" fill="url(#gold)"/>
 </svg>

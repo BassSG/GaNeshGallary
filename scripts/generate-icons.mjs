@@ -5,8 +5,16 @@ const outDir = "public/icons";
 const CRC_TABLE = makeCrcTable();
 
 await mkdir(outDir, { recursive: true });
-await writeFile(`${outDir}/icon-192.png`, createIconPng(192));
-await writeFile(`${outDir}/icon-512.png`, createIconPng(512));
+const icon192 = createIconPng(192);
+const icon512 = createIconPng(512);
+await writeFile(`${outDir}/icon-192.png`, icon192);
+await writeFile(`${outDir}/icon-512.png`, icon512);
+await writeFile(`${outDir}/gallery-icon-192.png`, icon192);
+await writeFile(`${outDir}/gallery-icon-512.png`, icon512);
+await writeFile(`${outDir}/icon-maskable-192.png`, icon192);
+await writeFile(`${outDir}/icon-maskable-512.png`, icon512);
+await writeFile(`${outDir}/gallery-icon-maskable-192.png`, icon192);
+await writeFile(`${outDir}/gallery-icon-maskable-512.png`, icon512);
 
 console.log("Generated PWA PNG icons.");
 
@@ -26,15 +34,38 @@ function createIconPng(size) {
     }
   }
 
-  drawCircle(raw, width, height, width * 0.75, height * 0.26, size * 0.065, [42, 161, 152, 255]);
-  drawCircle(raw, width, height, width * 0.5, height * 0.47, size * 0.3, [213, 164, 60, 255]);
-  drawCircle(raw, width, height, width * 0.5, height * 0.44, size * 0.235, [242, 212, 123, 255]);
-  drawCircle(raw, width, height, width * 0.39, height * 0.49, size * 0.035, [18, 19, 18, 255]);
-  drawCircle(raw, width, height, width * 0.61, height * 0.49, size * 0.035, [18, 19, 18, 255]);
-  drawArc(raw, width, height, width * 0.5, height * 0.61, size * 0.13, size * 0.055, [18, 19, 18, 255]);
-  drawRoundedLine(raw, width, height, width * 0.3, height * 0.78, width * 0.7, height * 0.78, size * 0.055, [248, 248, 245, 245]);
+  drawRoundedRect(raw, width, height, size * 0.1, size * 0.1, size * 0.8, size * 0.8, size * 0.16, [217, 164, 60, 255]);
+  drawRoundedRect(raw, width, height, size * 0.125, size * 0.125, size * 0.75, size * 0.75, size * 0.14, [13, 18, 22, 255]);
+  drawRoundedLine(raw, width, height, width * 0.18, height * 0.81, width * 0.82, height * 0.81, size * 0.016, [67, 214, 190, 255]);
+
+  drawPhotoCard(raw, width, height, size * 0.21, size * 0.27, size * 0.27, size * 0.43, [20, 131, 148, 255], [9, 47, 58, 255]);
+  drawPhotoCard(raw, width, height, size * 0.52, size * 0.25, size * 0.27, size * 0.44, [105, 80, 40, 255], [31, 42, 37, 255]);
+  drawPhotoCard(raw, width, height, size * 0.34, size * 0.18, size * 0.32, size * 0.53, [224, 176, 86, 255], [24, 52, 62, 255]);
+
+  drawCircle(raw, width, height, width * 0.72, height * 0.69, size * 0.13, [20, 19, 16, 255]);
+  drawCircle(raw, width, height, width * 0.72, height * 0.69, size * 0.105, [218, 166, 60, 255]);
+  drawCircle(raw, width, height, width * 0.72, height * 0.69, size * 0.085, [18, 18, 16, 255]);
+  drawCircle(raw, width, height, width * 0.765, height * 0.64, size * 0.018, [255, 226, 148, 255]);
+  drawMountainBadge(raw, width, height, size);
 
   return pngEncode(width, height, raw);
+}
+
+function drawPhotoCard(buffer, width, height, x, y, cardWidth, cardHeight, topColor, bottomColor) {
+  const radius = width * 0.04;
+  drawRoundedRect(buffer, width, height, x - width * 0.012, y + height * 0.018, cardWidth, cardHeight, radius, [0, 0, 0, 255]);
+  drawRoundedRect(buffer, width, height, x, y, cardWidth, cardHeight, radius, [245, 241, 231, 255]);
+  drawRoundedRect(buffer, width, height, x + width * 0.018, y + height * 0.018, cardWidth - width * 0.036, cardHeight - height * 0.036, radius * 0.72, topColor);
+  drawRoundedRect(buffer, width, height, x + width * 0.018, y + cardHeight * 0.56, cardWidth - width * 0.036, cardHeight * 0.42, radius * 0.45, bottomColor);
+  drawRoundedLine(buffer, width, height, x + cardWidth * 0.18, y + cardHeight * 0.72, x + cardWidth * 0.46, y + cardHeight * 0.52, width * 0.012, [248, 214, 138, 245]);
+  drawRoundedLine(buffer, width, height, x + cardWidth * 0.42, y + cardHeight * 0.52, x + cardWidth * 0.82, y + cardHeight * 0.75, width * 0.012, [248, 214, 138, 245]);
+}
+
+function drawMountainBadge(buffer, width, height, size) {
+  drawRoundedLine(buffer, width, height, width * 0.66, height * 0.73, width * 0.71, height * 0.66, size * 0.018, [255, 218, 126, 255]);
+  drawRoundedLine(buffer, width, height, width * 0.71, height * 0.66, width * 0.76, height * 0.73, size * 0.018, [255, 218, 126, 255]);
+  drawRoundedLine(buffer, width, height, width * 0.74, height * 0.73, width * 0.79, height * 0.68, size * 0.018, [255, 218, 126, 255]);
+  drawRoundedLine(buffer, width, height, width * 0.79, height * 0.68, width * 0.84, height * 0.73, size * 0.018, [255, 218, 126, 255]);
 }
 
 function setPixel(buffer, offset, r, g, b, a) {
@@ -61,6 +92,24 @@ function drawCircle(buffer, width, height, cx, cy, radius, rgba) {
       const dy = y - cy;
       if (dx * dx + dy * dy <= r2) {
         const offset = y * (width * 4 + 1) + 1 + x * 4;
+        setPixel(buffer, offset, rgba[0], rgba[1], rgba[2], rgba[3]);
+      }
+    }
+  }
+}
+
+function drawRoundedRect(buffer, width, height, x, y, rectWidth, rectHeight, radius, rgba) {
+  const minX = Math.max(0, Math.floor(x));
+  const maxX = Math.min(width - 1, Math.ceil(x + rectWidth));
+  const minY = Math.max(0, Math.floor(y));
+  const maxY = Math.min(height - 1, Math.ceil(y + rectHeight));
+
+  for (let yy = minY; yy <= maxY; yy += 1) {
+    for (let xx = minX; xx <= maxX; xx += 1) {
+      const dx = Math.max(x + radius - xx, 0, xx - (x + rectWidth - radius));
+      const dy = Math.max(y + radius - yy, 0, yy - (y + rectHeight - radius));
+      if (dx * dx + dy * dy <= radius * radius) {
+        const offset = yy * (width * 4 + 1) + 1 + xx * 4;
         setPixel(buffer, offset, rgba[0], rgba[1], rgba[2], rgba[3]);
       }
     }
