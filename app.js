@@ -21,12 +21,16 @@ const ICONS = {
   download: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>',
   external: '<svg viewBox="0 0 24 24" fill="none"><path d="M15 3h6v6"/><path d="m10 14 11-11"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>',
   folders: '<svg viewBox="0 0 24 24" fill="none"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1"/><path d="M3 9h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+  home: '<svg viewBox="0 0 24 24" fill="none"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>',
   image: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 4-4 5 5 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>',
   left: '<svg viewBox="0 0 24 24" fill="none"><path d="m15 18-6-6 6-6"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none"><path d="M20 12a8 8 0 0 1-14.7 4.4"/><path d="M4 12A8 8 0 0 1 18.7 7.6"/><path d="M18 3v5h-5"/><path d="M6 21v-5h5"/></svg>',
   right: '<svg viewBox="0 0 24 24" fill="none"><path d="m9 18 6-6-6-6"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="none"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg>',
   sort: '<svg viewBox="0 0 24 24" fill="none"><path d="M7 4v16"/><path d="m3 8 4-4 4 4"/><path d="M17 20V4"/><path d="m21 16-4 4-4-4"/></svg>',
+  archive: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16"/><path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/><path d="M9 11h6"/><path d="M8 3h8l2 4H6Z"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z"/></svg>',
   video: '<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3Z"/></svg>'
 };
 
@@ -61,6 +65,9 @@ function cacheElements() {
   [
     "syncLabel",
     "libraryCount",
+    "quickNav",
+    "driveAllCount",
+    "driveRecentCount",
     "folderList",
     "onlineDot",
     "onlineLabel",
@@ -78,6 +85,8 @@ function cacheElements() {
     "statFolders",
     "statLatest",
     "mobileFolderStrip",
+    "mobileHomeButton",
+    "mobileFoldersButton",
     "folderCards",
     "resultCount",
     "resultTitle",
@@ -108,6 +117,13 @@ function hydrateIcons() {
 
 function bindEvents() {
   els.folderList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-folder-id]");
+    if (button) {
+      selectFolder(button.dataset.folderId);
+    }
+  });
+
+  els.quickNav.addEventListener("click", (event) => {
     const button = event.target.closest("[data-folder-id]");
     if (button) {
       selectFolder(button.dataset.folderId);
@@ -150,6 +166,15 @@ function bindEvents() {
   els.refreshButton.addEventListener("click", () => loadData({ forceLive: true, bustCache: true }));
 
   els.openFoldersButton.addEventListener("click", () => {
+    document.body.classList.add("nav-open");
+  });
+
+  els.mobileHomeButton.addEventListener("click", () => {
+    selectFolder("all");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  els.mobileFoldersButton.addEventListener("click", () => {
     document.body.classList.add("nav-open");
   });
 
@@ -354,7 +379,9 @@ function normalizeManifest(manifest) {
       createdTime: item.createdTime || item.created_time || item.modifiedTime || item.modified_time || manifest.generatedAt,
       modifiedTime: item.modifiedTime || item.modified_time || item.createdTime || item.created_time || manifest.generatedAt,
       thumbnailUrl: item.thumbnailUrl || item.thumbnailLink || driveThumbnailUrl(item.id, 1000),
+      thumbnailFallbackUrl: item.thumbnailFallbackUrl || driveGoogleusercontentUrl(item.id, 1000),
       fullUrl: item.fullUrl || (type === "video" ? drivePreviewUrl(item.id) : driveThumbnailUrl(item.id, 2400)),
+      fullFallbackUrl: item.fullFallbackUrl || (type === "video" ? drivePreviewUrl(item.id) : driveGoogleusercontentUrl(item.id, 2400)),
       previewUrl: item.previewUrl || drivePreviewUrl(item.id),
       viewUrl: item.viewUrl || item.webViewLink || `https://drive.google.com/file/d/${item.id}/view`,
       width: item.width || item.imageMediaMetadata?.width || item.videoMediaMetadata?.width || null,
@@ -384,7 +411,9 @@ function fileToItem(file, folderId, pathSegments) {
     createdTime: file.createdTime,
     modifiedTime: file.imageMediaMetadata?.time || file.modifiedTime || file.createdTime,
     thumbnailUrl: driveThumbnailUrl(file.id, type === "video" ? 900 : 1000),
+    thumbnailFallbackUrl: driveGoogleusercontentUrl(file.id, type === "video" ? 900 : 1000),
     fullUrl: type === "video" ? drivePreviewUrl(file.id) : driveThumbnailUrl(file.id, 2400),
+    fullFallbackUrl: type === "video" ? drivePreviewUrl(file.id) : driveGoogleusercontentUrl(file.id, 2400),
     previewUrl: drivePreviewUrl(file.id),
     viewUrl: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`,
     width: file.imageMediaMetadata?.width || file.videoMediaMetadata?.width || null,
@@ -470,18 +499,16 @@ function renderNavigation() {
   els.libraryCount.textContent = `${formatNumber(totalItems)} items`;
 
   const nodes = [
-    folderButtonHtml({
-      id: "all",
-      name: "All Media",
-      count: totalItems,
-      depth: 0,
-      active: state.selectedFolderId === "all"
-    }),
     ...renderFolderTree(rootId, 0)
   ];
 
   els.folderList.innerHTML = nodes.join("");
   hydrateIconsIn(els.folderList);
+  els.quickNav.querySelectorAll("[data-folder-id]").forEach((button) => {
+    button.classList.toggle("is-active", state.selectedFolderId === button.dataset.folderId);
+  });
+  els.mobileHomeButton.classList.toggle("is-active", state.selectedFolderId === "all");
+  els.mobileFoldersButton.classList.toggle("is-active", state.selectedFolderId !== "all");
 }
 
 function renderFolderTree(parentId, depth) {
@@ -513,6 +540,8 @@ function renderStats() {
   els.statMedia.textContent = formatNumber(items.length);
   els.statFolders.textContent = formatNumber(Math.max(state.manifest.folders.length - 1, 0));
   els.statLatest.textContent = latest ? formatShortDate(latest.modifiedTime) : "-";
+  els.driveAllCount.textContent = formatNumber(items.length);
+  els.driveRecentCount.textContent = formatNumber(Math.min(items.length, 1253));
   els.generatedLabel.textContent = `Updated ${formatDateTime(state.manifest.generatedAt)}`;
 }
 
@@ -549,7 +578,11 @@ function renderFolderCards() {
       return `
         <button class="folder-card" type="button" data-folder-id="${escapeAttr(folder.id)}">
           <span class="folder-card-preview ${cover ? "is-loading" : ""}">
-            ${cover ? `<img src="${escapeAttr(cover.thumbnailUrl)}" alt="" loading="lazy" decoding="async" />` : ""}
+            ${
+              cover
+                ? `<img src="${escapeAttr(cover.thumbnailUrl)}" data-fallback-src="${escapeAttr(cover.thumbnailFallbackUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" />`
+                : ""
+            }
           </span>
           <span>
             <span>${formatNumber(count)} media</span>
@@ -570,7 +603,7 @@ function renderGallery() {
 
   els.resultCount.textContent = `${formatNumber(items.length)} results`;
   els.resultTitle.textContent = state.selectedFolderId === "all" ? "Full library" : getSelectedFolder()?.name || "Gallery";
-  els.resultNote.textContent = resultNote(items);
+  els.resultNote.textContent = `${formatNumber(items.length)} items | Sorted by ${state.sort === "oldest" ? "oldest date" : state.sort === "name" ? "name" : "date taken"}`;
 
   els.galleryGrid.innerHTML = visible.map(mediaCardHtml).join("");
   hydrateIconsIn(els.galleryGrid);
@@ -621,7 +654,7 @@ function mediaCardHtml(item, index) {
   return `
     <article class="media-card ${shapeClass}">
       <button class="media-button is-loading" type="button" data-item-id="${escapeAttr(item.id)}" aria-label="${escapeAttr(item.name)}">
-        <img src="${escapeAttr(item.thumbnailUrl)}" alt="${escapeAttr(item.name)}" loading="lazy" decoding="async" />
+        <img src="${escapeAttr(item.thumbnailUrl)}" data-fallback-src="${escapeAttr(item.thumbnailFallbackUrl)}" alt="${escapeAttr(item.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
         <span class="media-fallback" aria-hidden="true">
           <span data-icon="${typeIcon}"></span>
           <strong>Drive preview</strong>
@@ -716,11 +749,17 @@ function renderLightbox() {
     const image = document.createElement("img");
     image.src = item.fullUrl;
     image.alt = item.name;
+    image.referrerPolicy = "no-referrer";
     image.decoding = "async";
     image.loading = "eager";
     image.onerror = () => {
+      const nextUrl = image.src === item.fullUrl ? item.fullFallbackUrl : item.thumbnailUrl;
+      if (nextUrl && image.src !== nextUrl) {
+        image.src = nextUrl;
+        return;
+      }
       image.onerror = null;
-      image.src = item.thumbnailUrl;
+      image.src = item.thumbnailFallbackUrl || item.thumbnailUrl;
     };
     els.lightboxStage.appendChild(image);
     fitLightboxImage(image);
@@ -846,6 +885,15 @@ function wireImageFallbacks(root) {
     const markLoaded = () => {
       host.classList.remove("is-loading", "is-broken");
     };
+    const tryFallback = () => {
+      const fallbackSrc = image.dataset.fallbackSrc;
+      if (!fallbackSrc || image.dataset.fallbackTried === "true" || image.src === fallbackSrc) {
+        return false;
+      }
+      image.dataset.fallbackTried = "true";
+      image.src = fallbackSrc;
+      return true;
+    };
     const markBroken = () => {
       host.classList.remove("is-loading");
       host.classList.add("is-broken");
@@ -856,11 +904,17 @@ function wireImageFallbacks(root) {
       return;
     }
 
-    image.addEventListener("load", markLoaded, { once: true });
-    image.addEventListener("error", markBroken, { once: true });
+    image.addEventListener("load", markLoaded);
+    image.addEventListener("error", () => {
+      if (!tryFallback()) {
+        markBroken();
+      }
+    });
     window.setTimeout(() => {
       if (!image.complete || !image.naturalWidth) {
-        markBroken();
+        if (!tryFallback()) {
+          markBroken();
+        }
       }
     }, 6500);
   });
@@ -872,6 +926,10 @@ function isSupportedMedia(mimeType = "") {
 
 function driveThumbnailUrl(fileId, width) {
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${width}`;
+}
+
+function driveGoogleusercontentUrl(fileId, width) {
+  return `https://lh3.googleusercontent.com/d/${encodeURIComponent(fileId)}=w${width}`;
 }
 
 function drivePreviewUrl(fileId) {

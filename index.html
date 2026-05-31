@@ -34,14 +34,35 @@
           </div>
         </div>
 
-        <button class="primary-action" id="installButton" type="button">
-          <span data-icon="download"></span>
-          <span>Install App</span>
-        </button>
+        <div class="quick-nav" id="quickNav" aria-label="Drive views">
+          <div class="section-heading">
+            <span>Drive</span>
+          </div>
+          <button class="quick-nav-item is-active" type="button" data-folder-id="all">
+            <span data-icon="image"></span>
+            <span>All Photos</span>
+            <small id="driveAllCount">0</small>
+          </button>
+          <button class="quick-nav-item" type="button" data-view="recent">
+            <span data-icon="refresh"></span>
+            <span>Recent</span>
+            <small id="driveRecentCount">0</small>
+          </button>
+          <button class="quick-nav-item" type="button" data-view="favorites" disabled>
+            <span data-icon="star"></span>
+            <span>Favorites</span>
+            <small>0</small>
+          </button>
+          <button class="quick-nav-item" type="button" data-view="archive" disabled>
+            <span data-icon="archive"></span>
+            <span>Archive</span>
+            <small>0</small>
+          </button>
+        </div>
 
         <div class="side-section">
           <div class="section-heading">
-            <span>Library</span>
+            <span>Folders</span>
             <span id="libraryCount">0 items</span>
           </div>
           <div class="folder-list" id="folderList"></div>
@@ -54,6 +75,7 @@
               <strong id="onlineLabel">Online</strong>
             </div>
             <small id="generatedLabel">Manifest pending</small>
+            <span class="storage-bar" aria-hidden="true"><span></span></span>
           </div>
         </div>
       </aside>
@@ -77,10 +99,14 @@
           </label>
 
           <div class="top-actions">
+            <button class="primary-action install-top-action" id="installButton" type="button">
+              <span data-icon="download"></span>
+              <span>Install App</span>
+            </button>
             <label class="sort-control">
               <span data-icon="sort"></span>
               <select id="sortSelect" aria-label="Sort gallery">
-                <option value="newest">Newest first</option>
+                <option value="newest">Date taken</option>
                 <option value="oldest">Oldest first</option>
                 <option value="name">Name</option>
               </select>
@@ -125,6 +151,29 @@
           <p>Try another folder or search term.</p>
         </div>
         <div class="load-sentinel" id="loadSentinel" aria-hidden="true"></div>
+
+        <nav class="mobile-bottom-nav mobile-only" aria-label="Mobile app navigation">
+          <button class="is-active" id="mobileHomeButton" type="button">
+            <span data-icon="home"></span>
+            <small>Home</small>
+          </button>
+          <button id="mobileFoldersButton" type="button">
+            <span data-icon="folders"></span>
+            <small>Folders</small>
+          </button>
+          <button type="button" disabled>
+            <span data-icon="star"></span>
+            <small>Favorites</small>
+          </button>
+          <button type="button" disabled>
+            <span data-icon="refresh"></span>
+            <small>Offline</small>
+          </button>
+          <button type="button" disabled>
+            <span data-icon="more"></span>
+            <small>More</small>
+          </button>
+        </nav>
       </main>
     </div>
 

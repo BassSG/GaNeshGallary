@@ -37,7 +37,7 @@ For live browser-side sync, copy `drive-config.example.js` to `drive-config.js`,
 The workflow `.github/workflows/pages.yml` deploys the static app to GitHub Pages on every push to `main`. The expected Pages URL is:
 
 ```text
-https://basssg.github.io/GaNeshPicture27/
+https://basssg.github.io/GaNeshNiti27/
 ```
 
 ## Verification
