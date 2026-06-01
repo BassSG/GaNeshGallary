@@ -17,8 +17,10 @@ const state = {
   activeItemId: null,
   deferredInstallPrompt: null,
   uploadAccessToken: "",
+  uploadTokenExpiresAt: 0,
   uploadClientId: "",
-  uploadTokenClient: null
+  uploadTokenClient: null,
+  uploadTokenReject: null
 };
 
 const els = {};
@@ -66,6 +68,7 @@ async function init() {
   registerServiceWorker();
   hydrateInstallPrompt();
   await loadData();
+  setupMobileChromeAutoHide();
   setupInfiniteLoading();
 }
 
@@ -228,6 +231,51 @@ function bindEvents() {
 
   window.addEventListener("online", updateConnectionState);
   window.addEventListener("offline", updateConnectionState);
+}
+
+function setupMobileChromeAutoHide() {
+  const scroller = els.mainView;
+  if (!scroller) {
+    return;
+  }
+
+  let lastScrollTop = scroller.scrollTop;
+  let ticking = false;
+
+  const updateChrome = () => {
+    const currentTop = scroller.scrollTop;
+    const delta = currentTop - lastScrollTop;
+    const isMobile = window.matchMedia("(max-width: 860px)").matches;
+    const lightboxOpen = els.lightbox && !els.lightbox.hidden;
+
+    if (!isMobile || document.body.classList.contains("nav-open") || lightboxOpen || currentTop < 56) {
+      document.body.classList.remove("mobile-chrome-hidden");
+    } else if (delta > 8 && currentTop > 132) {
+      document.body.classList.add("mobile-chrome-hidden");
+    } else if (delta < -8) {
+      document.body.classList.remove("mobile-chrome-hidden");
+    }
+
+    lastScrollTop = Math.max(currentTop, 0);
+    ticking = false;
+  };
+
+  scroller.addEventListener(
+    "scroll",
+    () => {
+      if (!ticking) {
+        window.requestAnimationFrame(updateChrome);
+        ticking = true;
+      }
+    },
+    { passive: true }
+  );
+
+  window.addEventListener("resize", () => {
+    if (!window.matchMedia("(max-width: 860px)").matches) {
+      document.body.classList.remove("mobile-chrome-hidden");
+    }
+  });
 }
 
 async function loadData(options = {}) {
@@ -404,16 +452,27 @@ async function uploadSelectedFiles(files) {
 
   try {
     els.uploadButton.disabled = true;
-    setUploadStatus(`Preparing ${formatNumber(mediaFiles.length)} file${mediaFiles.length > 1 ? "s" : ""} for Upload.`);
+    els.refreshButton.disabled = true;
+    const totalBytes = mediaFiles.reduce((sum, file) => sum + Math.max(file.size || 0, 1), 0);
+    let uploadedBytes = 0;
+
+    setUploadProgress(2, "Preparing upload", `${formatNumber(mediaFiles.length)} file${mediaFiles.length > 1 ? "s" : ""} selected`);
     const accessToken = await getUploadAccessToken(googleClientId);
+    setUploadProgress(6, "Connecting to Drive", "Checking the Upload folder");
     const uploadFolder = await ensureUploadFolder(accessToken);
     ensureUploadFolderInManifest(uploadFolder);
 
     const uploadedItems = [];
     for (let index = 0; index < mediaFiles.length; index += 1) {
       const file = mediaFiles[index];
-      setUploadStatus(`Uploading ${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)}: ${file.name}`);
-      const uploadedFile = await uploadFileToDrive(file, uploadFolder.id, accessToken);
+      const fileSize = Math.max(file.size || 0, 1);
+      const fileLabel = `${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)} · ${file.name}`;
+      setUploadProgress(uploadPercent(uploadedBytes, totalBytes), "Uploading", fileLabel);
+      const uploadedFile = await uploadFileToDrive(file, uploadFolder.id, accessToken, (loaded) => {
+        setUploadProgress(uploadPercent(uploadedBytes + Math.min(loaded, fileSize), totalBytes), "Uploading", fileLabel);
+      });
+      uploadedBytes += fileSize;
+      setUploadProgress(uploadPercent(uploadedBytes, totalBytes), "Processing in Drive", fileLabel);
       uploadedItems.push(addUploadedItemToManifest(uploadedFile, uploadFolder));
     }
 
@@ -423,16 +482,21 @@ async function uploadSelectedFiles(files) {
     state.visibleLimit = MEDIA_BATCH_SIZE;
     renderAll();
     persistUploadedItems(uploadFolder, uploadedItems);
-    setUploadStatus(`Uploaded ${formatNumber(uploadedItems.length)} file${uploadedItems.length > 1 ? "s" : ""} to ${uploadFolder.name}.`);
+    setUploadProgress(100, "Upload complete", `${formatNumber(uploadedItems.length)} file${uploadedItems.length > 1 ? "s" : ""} added to ${uploadFolder.name}`);
   } catch (error) {
     console.error(error);
     setUploadStatus(error.message || "Upload failed. Please try again.", true);
   } finally {
     els.uploadButton.disabled = false;
+    els.refreshButton.disabled = false;
   }
 }
 
 async function getUploadAccessToken(googleClientId) {
+  if (state.uploadAccessToken && Date.now() < state.uploadTokenExpiresAt - 60_000) {
+    return state.uploadAccessToken;
+  }
+
   await loadGoogleIdentityServices();
 
   if (!state.uploadTokenClient || state.uploadClientId !== googleClientId) {
@@ -440,20 +504,45 @@ async function getUploadAccessToken(googleClientId) {
     state.uploadTokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: googleClientId,
       scope: GOOGLE_DRIVE_UPLOAD_SCOPE,
-      callback: () => {}
+      include_granted_scopes: true,
+      callback: () => {},
+      error_callback: (error) => {
+        if (state.uploadTokenReject) {
+          state.uploadTokenReject(new Error(error.message || error.type || "Google login was cancelled."));
+          state.uploadTokenReject = null;
+        }
+      }
     });
   }
 
+  const hasGrantedAccess = window.localStorage.getItem("ganeshDriveUploadGranted") === "true";
+
+  try {
+    return await requestUploadAccessToken(hasGrantedAccess ? "" : "consent");
+  } catch (error) {
+    if (hasGrantedAccess) {
+      return requestUploadAccessToken("consent");
+    }
+    throw error;
+  }
+}
+
+function requestUploadAccessToken(prompt) {
   return new Promise((resolve, reject) => {
+    state.uploadTokenReject = reject;
     state.uploadTokenClient.callback = (response) => {
       if (response.error) {
+        state.uploadTokenReject = null;
         reject(new Error(response.error_description || response.error));
         return;
       }
       state.uploadAccessToken = response.access_token;
+      state.uploadTokenExpiresAt = Date.now() + Number(response.expires_in || 3300) * 1000;
+      state.uploadTokenReject = null;
+      window.localStorage.setItem("ganeshDriveUploadGranted", "true");
       resolve(response.access_token);
     };
-    state.uploadTokenClient.requestAccessToken({ prompt: state.uploadAccessToken ? "" : "consent" });
+    state.uploadTokenClient.requestAccessToken({ prompt });
   });
 }
 
@@ -545,7 +634,7 @@ async function createUploadFolder(rootFolderId, accessToken) {
   return normalizeUploadFolder(await response.json());
 }
 
-async function uploadFileToDrive(file, folderId, accessToken) {
+function uploadFileToDrive(file, folderId, accessToken, onProgress = () => {}) {
   const boundary = `ganesh_upload_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const metadata = {
     name: file.name,
@@ -562,23 +651,32 @@ async function uploadFileToDrive(file, folderId, accessToken) {
     { type: `multipart/related; boundary=${boundary}` }
   );
 
-  const response = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,imageMediaMetadata,videoMediaMetadata",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": `multipart/related; boundary=${boundary}`
-      },
-      body
-    }
-  );
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(
+      "POST",
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,imageMediaMetadata,videoMediaMetadata"
+    );
+    request.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+    request.setRequestHeader("Content-Type", `multipart/related; boundary=${boundary}`);
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Unable to upload ${file.name}: ${response.status} ${detail}`);
-  }
-  return response.json();
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress((event.loaded / event.total) * Math.max(file.size || 0, 1));
+      }
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(Math.max(file.size || 0, 1));
+        resolve(JSON.parse(request.responseText));
+        return;
+      }
+      reject(new Error(`Unable to upload ${file.name}: ${request.status} ${request.responseText}`));
+    };
+    request.onerror = () => reject(new Error(`Network error while uploading ${file.name}`));
+    request.onabort = () => reject(new Error(`Upload cancelled: ${file.name}`));
+    request.send(body);
+  });
 }
 
 async function driveAuthorizedRequest(path, accessToken, params = {}) {
@@ -1137,6 +1235,7 @@ function selectFolder(folderId) {
   state.selectedFolderId = folderId;
   state.visibleLimit = MEDIA_BATCH_SIZE;
   document.body.classList.remove("nav-open");
+  document.body.classList.remove("mobile-chrome-hidden");
   renderAll();
   els.mainView?.scrollTo?.({ top: 0, behavior: "smooth" });
 }
@@ -1249,14 +1348,47 @@ function closeLightbox() {
   document.body.style.overflow = "";
 }
 
-function setUploadStatus(message, isError = false) {
+function setUploadProgress(percent, title, detail = "") {
+  setUploadStatus(title, false, { detail, percent });
+}
+
+function uploadPercent(loadedBytes, totalBytes) {
+  if (!totalBytes) {
+    return 0;
+  }
+  return Math.min(99, Math.max(0, Math.round((loadedBytes / totalBytes) * 100)));
+}
+
+function setUploadStatus(message, isError = false, progress = null) {
   if (!els.uploadStatus) {
     return;
   }
 
   els.uploadStatus.hidden = !message;
-  els.uploadStatus.textContent = message;
   els.uploadStatus.classList.toggle("is-error", isError);
+
+  if (!message) {
+    els.uploadStatus.textContent = "";
+    return;
+  }
+
+  if (progress && Number.isFinite(progress.percent)) {
+    const percent = Math.min(100, Math.max(0, Math.round(progress.percent)));
+    const detailMarkup = progress.detail
+      ? `<small class="upload-status-detail">${escapeHtml(progress.detail)}</small>`
+      : "";
+    els.uploadStatus.innerHTML = `
+      <span class="upload-status-row">
+        <strong>${escapeHtml(message)}</strong>
+        <small>${percent}%</small>
+      </span>
+      <span class="upload-progress" aria-hidden="true" style="--progress: ${percent}%"><span></span></span>
+      ${detailMarkup}
+    `;
+    return;
+  }
+
+  els.uploadStatus.textContent = message;
 }
 
 function setupInfiniteLoading() {
