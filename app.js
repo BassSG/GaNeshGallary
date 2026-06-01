@@ -20,7 +20,8 @@ const state = {
   uploadTokenExpiresAt: 0,
   uploadClientId: "",
   uploadTokenClient: null,
-  uploadTokenReject: null
+  uploadTokenReject: null,
+  pendingUploadFiles: []
 };
 
 const els = {};
@@ -67,6 +68,7 @@ async function init() {
   updateConnectionState();
   registerServiceWorker();
   hydrateInstallPrompt();
+  prewarmGoogleUpload();
   await loadData();
   setupMobileChromeAutoHide();
   setupInfiniteLoading();
@@ -184,6 +186,12 @@ function bindEvents() {
     els.uploadInput.click();
   });
   els.uploadInput.addEventListener("change", (event) => uploadSelectedFiles(Array.from(event.target.files || [])));
+  els.uploadStatus.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-upload-action]");
+    if (button?.dataset.uploadAction === "connect") {
+      connectPendingUpload();
+    }
+  });
 
   els.openFoldersButton.addEventListener("click", () => {
     document.body.classList.add("nav-open");
@@ -450,6 +458,47 @@ async function uploadSelectedFiles(files) {
     return;
   }
 
+  if (!hasFreshUploadToken()) {
+    state.pendingUploadFiles = mediaFiles;
+    setUploadConnectPrompt(mediaFiles.length);
+    return;
+  }
+
+  await performUpload(mediaFiles, state.uploadAccessToken);
+}
+
+async function connectPendingUpload() {
+  const mediaFiles = state.pendingUploadFiles.slice();
+  if (!mediaFiles.length) {
+    setUploadStatus("Choose photos or videos to upload.", true);
+    return;
+  }
+
+  const googleClientId = getGoogleClientId();
+  if (!googleClientId) {
+    setUploadStatus("Upload needs Google connection setup. Opening Drive folder for now.", true);
+    window.open(CONFIG.uploadFolderId ? driveFolderUrl(CONFIG.uploadFolderId) : driveFolderUrl(CONFIG.rootFolderId || DRIVE_ROOT_ID), "_blank", "noopener");
+    return;
+  }
+
+  try {
+    els.uploadButton.disabled = true;
+    els.refreshButton.disabled = true;
+    setUploadProgress(2, "Connecting to Google Drive", "Approve access once, then upload will start.");
+    const accessToken = await getUploadAccessToken(googleClientId);
+    state.pendingUploadFiles = [];
+    await performUpload(mediaFiles, accessToken);
+  } catch (error) {
+    console.error(error);
+    state.pendingUploadFiles = mediaFiles;
+    setUploadConnectPrompt(mediaFiles.length, uploadErrorMessage(error), true);
+  } finally {
+    els.uploadButton.disabled = false;
+    els.refreshButton.disabled = false;
+  }
+}
+
+async function performUpload(mediaFiles, accessToken) {
   try {
     els.uploadButton.disabled = true;
     els.refreshButton.disabled = true;
@@ -457,7 +506,6 @@ async function uploadSelectedFiles(files) {
     let uploadedBytes = 0;
 
     setUploadProgress(2, "Preparing upload", `${formatNumber(mediaFiles.length)} file${mediaFiles.length > 1 ? "s" : ""} selected`);
-    const accessToken = await getUploadAccessToken(googleClientId);
     setUploadProgress(6, "Connecting to Drive", "Checking the Upload folder");
     const uploadFolder = await ensureUploadFolder(accessToken);
     ensureUploadFolderInManifest(uploadFolder);
@@ -466,7 +514,7 @@ async function uploadSelectedFiles(files) {
     for (let index = 0; index < mediaFiles.length; index += 1) {
       const file = mediaFiles[index];
       const fileSize = Math.max(file.size || 0, 1);
-      const fileLabel = `${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)} · ${file.name}`;
+      const fileLabel = `${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)} - ${file.name}`;
       setUploadProgress(uploadPercent(uploadedBytes, totalBytes), "Uploading", fileLabel);
       const uploadedFile = await uploadFileToDrive(file, uploadFolder.id, accessToken, (loaded) => {
         setUploadProgress(uploadPercent(uploadedBytes + Math.min(loaded, fileSize), totalBytes), "Uploading", fileLabel);
@@ -485,35 +533,24 @@ async function uploadSelectedFiles(files) {
     setUploadProgress(100, "Upload complete", `${formatNumber(uploadedItems.length)} file${uploadedItems.length > 1 ? "s" : ""} added to ${uploadFolder.name}`);
   } catch (error) {
     console.error(error);
-    setUploadStatus(error.message || "Upload failed. Please try again.", true);
+    setUploadStatus(uploadErrorMessage(error), true);
   } finally {
     els.uploadButton.disabled = false;
     els.refreshButton.disabled = false;
   }
 }
 
+function hasFreshUploadToken() {
+  return Boolean(state.uploadAccessToken && Date.now() < state.uploadTokenExpiresAt - 60_000);
+}
+
 async function getUploadAccessToken(googleClientId) {
-  if (state.uploadAccessToken && Date.now() < state.uploadTokenExpiresAt - 60_000) {
+  if (hasFreshUploadToken()) {
     return state.uploadAccessToken;
   }
 
   await loadGoogleIdentityServices();
-
-  if (!state.uploadTokenClient || state.uploadClientId !== googleClientId) {
-    state.uploadClientId = googleClientId;
-    state.uploadTokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: googleClientId,
-      scope: GOOGLE_DRIVE_UPLOAD_SCOPE,
-      include_granted_scopes: true,
-      callback: () => {},
-      error_callback: (error) => {
-        if (state.uploadTokenReject) {
-          state.uploadTokenReject(new Error(error.message || error.type || "Google login was cancelled."));
-          state.uploadTokenReject = null;
-        }
-      }
-    });
-  }
+  ensureUploadTokenClient(googleClientId);
 
   const hasGrantedAccess = window.localStorage.getItem("ganeshDriveUploadGranted") === "true";
 
@@ -546,6 +583,37 @@ function requestUploadAccessToken(prompt) {
   });
 }
 
+function prewarmGoogleUpload() {
+  const googleClientId = getGoogleClientId();
+  if (!googleClientId) {
+    return;
+  }
+
+  loadGoogleIdentityServices()
+    .then(() => ensureUploadTokenClient(googleClientId))
+    .catch((error) => console.warn("Google login prewarm failed", error));
+}
+
+function ensureUploadTokenClient(googleClientId) {
+  if (state.uploadTokenClient && state.uploadClientId === googleClientId) {
+    return;
+  }
+
+  state.uploadClientId = googleClientId;
+  state.uploadTokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: googleClientId,
+    scope: GOOGLE_DRIVE_UPLOAD_SCOPE,
+    include_granted_scopes: true,
+    callback: () => {},
+    error_callback: (error) => {
+      if (state.uploadTokenReject) {
+        state.uploadTokenReject(new Error(error.message || error.type || "Google login was cancelled."));
+        state.uploadTokenReject = null;
+      }
+    }
+  });
+}
+
 function getGoogleClientId() {
   const clientId = String(CONFIG.googleClientId || "").trim();
   if (!clientId || clientId.includes("YOUR_GOOGLE_OAUTH_CLIENT_ID")) {
@@ -564,6 +632,13 @@ function loadGoogleIdentityServices() {
     if (existingScript) {
       existingScript.addEventListener("load", () => resolve(), { once: true });
       existingScript.addEventListener("error", () => reject(new Error("Unable to load Google login.")), { once: true });
+      window.setTimeout(() => {
+        if (window.google?.accounts?.oauth2) {
+          resolve();
+        } else {
+          reject(new Error("Google login is still loading. Please try again."));
+        }
+      }, 7000);
       return;
     }
 
@@ -1348,6 +1423,25 @@ function closeLightbox() {
   document.body.style.overflow = "";
 }
 
+function setUploadConnectPrompt(fileCount, detail = "", isError = false) {
+  if (!els.uploadStatus) {
+    return;
+  }
+
+  const fileLabel = `${formatNumber(fileCount)} file${fileCount > 1 ? "s" : ""} ready`;
+  const detailText = detail || `${fileLabel}. Tap Connect Drive once to start uploading.`;
+  els.uploadStatus.hidden = false;
+  els.uploadStatus.classList.toggle("is-error", isError);
+  els.uploadStatus.innerHTML = `
+    <span class="upload-status-row">
+      <strong>Connect Google Drive</strong>
+      <small>${isError ? "Try again" : "Required"}</small>
+    </span>
+    <small class="upload-status-detail">${escapeHtml(detailText)}</small>
+    <button class="upload-connect-button" type="button" data-upload-action="connect">Connect Drive</button>
+  `;
+}
+
 function setUploadProgress(percent, title, detail = "") {
   setUploadStatus(title, false, { detail, percent });
 }
@@ -1389,6 +1483,17 @@ function setUploadStatus(message, isError = false, progress = null) {
   }
 
   els.uploadStatus.textContent = message;
+}
+
+function uploadErrorMessage(error) {
+  const message = String(error?.message || error || "").trim();
+  if (/popup|failed_to_open|open popup/i.test(message)) {
+    return "Google sign-in popup was blocked. Tap Connect Drive again and allow pop-ups for this site.";
+  }
+  if (/cancel|closed|denied|access_denied/i.test(message)) {
+    return "Google sign-in was cancelled. Tap Connect Drive when you are ready.";
+  }
+  return message || "Upload failed. Please try again.";
 }
 
 function setupInfiniteLoading() {

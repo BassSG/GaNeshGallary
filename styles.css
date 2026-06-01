@@ -605,6 +605,21 @@ button {
   transition: width 180ms ease;
 }
 
+.upload-connect-button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 10px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #ffd66c, var(--gold));
+  color: #1a1306;
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .gallery-header .upload-status.is-error {
   border-color: rgba(242, 189, 61, 0.34);
   background: rgba(242, 189, 61, 0.08);
