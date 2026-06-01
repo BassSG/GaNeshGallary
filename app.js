@@ -5,6 +5,9 @@ const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const UPLOAD_FOLDER_NAME = CONFIG.uploadFolderName || "Upload";
 const GOOGLE_DRIVE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/drive";
 const LOCAL_UPLOAD_CACHE_KEY = "ganeshUploadManifestCache";
+const RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024;
+const UPLOAD_RETRY_LIMIT = 3;
+const UPLOAD_RETRY_BASE_DELAY = 900;
 
 const state = {
   manifest: null,
@@ -21,7 +24,9 @@ const state = {
   uploadClientId: "",
   uploadTokenClient: null,
   uploadTokenReject: null,
-  pendingUploadFiles: []
+  pendingUploadFiles: [],
+  uploadWakeLock: null,
+  isUploading: false
 };
 
 const els = {};
@@ -239,6 +244,12 @@ function bindEvents() {
 
   window.addEventListener("online", updateConnectionState);
   window.addEventListener("offline", updateConnectionState);
+  window.addEventListener("beforeunload", warnBeforeLeavingUpload);
+  document.addEventListener("visibilitychange", () => {
+    if (state.isUploading && document.visibilityState === "visible") {
+      requestUploadWakeLock();
+    }
+  });
 }
 
 function setupMobileChromeAutoHide() {
@@ -499,42 +510,82 @@ async function connectPendingUpload() {
 }
 
 async function performUpload(mediaFiles, accessToken) {
+  state.isUploading = true;
+  const wakeLocked = await requestUploadWakeLock();
+
   try {
     els.uploadButton.disabled = true;
     els.refreshButton.disabled = true;
     const totalBytes = mediaFiles.reduce((sum, file) => sum + Math.max(file.size || 0, 1), 0);
-    let uploadedBytes = 0;
+    let processedBytes = 0;
 
-    setUploadProgress(2, "Preparing upload", `${formatNumber(mediaFiles.length)} file${mediaFiles.length > 1 ? "s" : ""} selected`);
+    setUploadProgress(
+      2,
+      "Upload Safe Mode",
+      wakeLocked ? "Screen stays awake while uploading." : "Auto retry is on. Keep this app open while uploading."
+    );
     setUploadProgress(6, "Connecting to Drive", "Checking the Upload folder");
     const uploadFolder = await ensureUploadFolder(accessToken);
     ensureUploadFolderInManifest(uploadFolder);
 
     const uploadedItems = [];
+    const failedItems = [];
     for (let index = 0; index < mediaFiles.length; index += 1) {
       const file = mediaFiles[index];
       const fileSize = Math.max(file.size || 0, 1);
       const fileLabel = `${formatNumber(index + 1)} of ${formatNumber(mediaFiles.length)} - ${file.name}`;
-      setUploadProgress(uploadPercent(uploadedBytes, totalBytes), "Uploading", fileLabel);
-      const uploadedFile = await uploadFileToDrive(file, uploadFolder.id, accessToken, (loaded) => {
-        setUploadProgress(uploadPercent(uploadedBytes + Math.min(loaded, fileSize), totalBytes), "Uploading", fileLabel);
-      });
-      uploadedBytes += fileSize;
-      setUploadProgress(uploadPercent(uploadedBytes, totalBytes), "Processing in Drive", fileLabel);
-      uploadedItems.push(addUploadedItemToManifest(uploadedFile, uploadFolder));
+      try {
+        setUploadProgress(uploadPercent(processedBytes, totalBytes), "Uploading safely", fileLabel);
+        const uploadedFile = await uploadFileWithRetry(file, uploadFolder.id, accessToken, {
+          onProgress: (loaded) => {
+            setUploadProgress(
+              uploadPercent(processedBytes + Math.min(loaded, fileSize), totalBytes),
+              "Uploading safely",
+              fileLabel
+            );
+          },
+          onRetry: (attempt) => {
+            setUploadProgress(
+              uploadPercent(processedBytes, totalBytes),
+              "Retrying upload",
+              `${fileLabel} - retry ${formatNumber(attempt)} of ${formatNumber(UPLOAD_RETRY_LIMIT)}`
+            );
+          }
+        });
+        processedBytes += fileSize;
+        setUploadProgress(uploadPercent(processedBytes, totalBytes), "Processing in Drive", fileLabel);
+        uploadedItems.push(addUploadedItemToManifest(uploadedFile, uploadFolder));
+      } catch (error) {
+        console.error(error);
+        processedBytes += fileSize;
+        failedItems.push({ file, error });
+      }
     }
 
-    state.manifest.generatedAt = new Date().toISOString();
-    state.index = buildIndex(state.manifest);
-    state.selectedFolderId = uploadFolder.id;
-    state.visibleLimit = MEDIA_BATCH_SIZE;
-    renderAll();
-    persistUploadedItems(uploadFolder, uploadedItems);
+    if (uploadedItems.length) {
+      state.manifest.generatedAt = new Date().toISOString();
+      state.index = buildIndex(state.manifest);
+      state.selectedFolderId = uploadFolder.id;
+      state.visibleLimit = MEDIA_BATCH_SIZE;
+      renderAll();
+      persistUploadedItems(uploadFolder, uploadedItems);
+    }
+
+    if (failedItems.length) {
+      setUploadStatus(
+        `${formatNumber(uploadedItems.length)} uploaded, ${formatNumber(failedItems.length)} need retry. Select failed files again when ready.`,
+        true
+      );
+      return;
+    }
+
     setUploadProgress(100, "Upload complete", `${formatNumber(uploadedItems.length)} file${uploadedItems.length > 1 ? "s" : ""} added to ${uploadFolder.name}`);
   } catch (error) {
     console.error(error);
     setUploadStatus(uploadErrorMessage(error), true);
   } finally {
+    state.isUploading = false;
+    releaseUploadWakeLock();
     els.uploadButton.disabled = false;
     els.refreshButton.disabled = false;
   }
@@ -542,6 +593,48 @@ async function performUpload(mediaFiles, accessToken) {
 
 function hasFreshUploadToken() {
   return Boolean(state.uploadAccessToken && Date.now() < state.uploadTokenExpiresAt - 60_000);
+}
+
+async function requestUploadWakeLock() {
+  if (!("wakeLock" in navigator) || document.visibilityState !== "visible") {
+    return false;
+  }
+
+  if (state.uploadWakeLock) {
+    return true;
+  }
+
+  try {
+    const wakeLock = await navigator.wakeLock.request("screen");
+    state.uploadWakeLock = wakeLock;
+    wakeLock.addEventListener("release", () => {
+      if (state.uploadWakeLock === wakeLock) {
+        state.uploadWakeLock = null;
+      }
+    });
+    return true;
+  } catch (error) {
+    console.warn("Screen wake lock unavailable", error);
+    return false;
+  }
+}
+
+function releaseUploadWakeLock() {
+  if (!state.uploadWakeLock) {
+    return;
+  }
+
+  state.uploadWakeLock.release().catch((error) => console.warn("Wake lock release failed", error));
+  state.uploadWakeLock = null;
+}
+
+function warnBeforeLeavingUpload(event) {
+  if (!state.isUploading) {
+    return;
+  }
+
+  event.preventDefault();
+  event.returnValue = "";
 }
 
 async function getUploadAccessToken(googleClientId) {
@@ -709,49 +802,201 @@ async function createUploadFolder(rootFolderId, accessToken) {
   return normalizeUploadFolder(await response.json());
 }
 
-function uploadFileToDrive(file, folderId, accessToken, onProgress = () => {}) {
-  const boundary = `ganesh_upload_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+async function uploadFileWithRetry(file, folderId, accessToken, handlers = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= UPLOAD_RETRY_LIMIT; attempt += 1) {
+    try {
+      return await uploadFileToDrive(file, folderId, accessToken, handlers);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= UPLOAD_RETRY_LIMIT) {
+        break;
+      }
+      handlers.onRetry?.(attempt + 1, error);
+      await delay(UPLOAD_RETRY_BASE_DELAY * attempt);
+    }
+  }
+
+  throw lastError || new Error(`Unable to upload ${file.name}`);
+}
+
+async function uploadFileToDrive(file, folderId, accessToken, handlers = {}) {
   const metadata = {
     name: file.name,
     mimeType: file.type || mimeFromFileName(file.name),
     parents: [folderId]
   };
-  const body = new Blob(
-    [
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
-      `--${boundary}\r\nContent-Type: ${metadata.mimeType}\r\n\r\n`,
-      file,
-      `\r\n--${boundary}--`
-    ],
-    { type: `multipart/related; boundary=${boundary}` }
+
+  const sessionUrl = await createResumableUploadSession(file, metadata, accessToken);
+  return uploadResumableFile(file, sessionUrl, accessToken, handlers);
+}
+
+async function createResumableUploadSession(file, metadata, accessToken) {
+  const response = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,imageMediaMetadata,videoMediaMetadata",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": metadata.mimeType,
+        "X-Upload-Content-Length": String(file.size || 0)
+      },
+      body: JSON.stringify(metadata)
+    }
   );
 
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Unable to start upload ${file.name}: ${response.status} ${detail}`);
+  }
+
+  const sessionUrl = response.headers.get("Location");
+  if (!sessionUrl) {
+    throw new Error("Google Drive did not return an upload session.");
+  }
+  return sessionUrl;
+}
+
+async function uploadResumableFile(file, sessionUrl, accessToken, handlers = {}) {
+  const totalBytes = Math.max(file.size || 0, 1);
+  let cursor = 0;
+
+  while (cursor < totalBytes) {
+    const start = cursor;
+    const end = Math.min(start + RESUMABLE_CHUNK_SIZE - 1, totalBytes - 1);
+    const chunk = file.slice(start, end + 1, file.type || mimeFromFileName(file.name));
+    const result = await uploadResumableChunkWithRetry({
+      accessToken,
+      chunk,
+      end,
+      file,
+      handlers,
+      sessionUrl,
+      start,
+      totalBytes
+    });
+
+    if (result.done) {
+      handlers.onProgress?.(totalBytes);
+      return result.file;
+    }
+
+    cursor = Math.max(result.nextByte || end + 1, start + 1);
+    handlers.onProgress?.(Math.min(cursor, totalBytes));
+  }
+
+  const finalStatus = await queryResumableUploadStatus(sessionUrl, totalBytes, accessToken);
+  if (finalStatus.done) {
+    handlers.onProgress?.(totalBytes);
+    return finalStatus.file;
+  }
+
+  throw new Error(`Upload did not finish: ${file.name}`);
+}
+
+async function uploadResumableChunkWithRetry({ accessToken, chunk, end, file, handlers, sessionUrl, start, totalBytes }) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= UPLOAD_RETRY_LIMIT; attempt += 1) {
+    try {
+      return await sendResumableChunk({
+        accessToken,
+        chunk,
+        end,
+        file,
+        onProgress: (loaded) => handlers.onProgress?.(start + loaded),
+        sessionUrl,
+        start,
+        totalBytes
+      });
+    } catch (error) {
+      lastError = error;
+      const status = await queryResumableUploadStatus(sessionUrl, totalBytes, accessToken).catch(() => null);
+      if (status?.done) {
+        return status;
+      }
+      if (status?.nextByte > start) {
+        return { done: false, nextByte: status.nextByte };
+      }
+      if (attempt >= UPLOAD_RETRY_LIMIT) {
+        break;
+      }
+      handlers.onRetry?.(attempt + 1, error);
+      await delay(UPLOAD_RETRY_BASE_DELAY * attempt);
+    }
+  }
+
+  throw lastError || new Error(`Unable to upload ${file.name}`);
+}
+
+function sendResumableChunk({ accessToken, chunk, end, file, onProgress, sessionUrl, start, totalBytes }) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
-    request.open(
-      "POST",
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink,webContentLink,imageMediaMetadata,videoMediaMetadata"
-    );
+    request.open("PUT", sessionUrl);
     request.setRequestHeader("Authorization", `Bearer ${accessToken}`);
-    request.setRequestHeader("Content-Type", `multipart/related; boundary=${boundary}`);
+    request.setRequestHeader("Content-Type", file.type || mimeFromFileName(file.name));
+    request.setRequestHeader("Content-Range", `bytes ${start}-${end}/${totalBytes}`);
 
     request.upload.onprogress = (event) => {
       if (event.lengthComputable) {
-        onProgress((event.loaded / event.total) * Math.max(file.size || 0, 1));
+        onProgress(Math.min(event.loaded, chunk.size));
       }
     };
+
     request.onload = () => {
       if (request.status >= 200 && request.status < 300) {
-        onProgress(Math.max(file.size || 0, 1));
-        resolve(JSON.parse(request.responseText));
+        onProgress(chunk.size);
+        resolve({ done: true, file: JSON.parse(request.responseText) });
+        return;
+      }
+      if (request.status === 308) {
+        resolve({
+          done: false,
+          nextByte: nextByteFromRange(request.getResponseHeader("Range"), end + 1)
+        });
         return;
       }
       reject(new Error(`Unable to upload ${file.name}: ${request.status} ${request.responseText}`));
     };
+
     request.onerror = () => reject(new Error(`Network error while uploading ${file.name}`));
     request.onabort = () => reject(new Error(`Upload cancelled: ${file.name}`));
-    request.send(body);
+    request.send(chunk);
   });
+}
+
+function queryResumableUploadStatus(sessionUrl, totalBytes, accessToken) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", sessionUrl);
+    request.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+    request.setRequestHeader("Content-Range", `bytes */${totalBytes}`);
+
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        resolve({ done: true, file: JSON.parse(request.responseText) });
+        return;
+      }
+      if (request.status === 308) {
+        resolve({
+          done: false,
+          nextByte: nextByteFromRange(request.getResponseHeader("Range"), 0)
+        });
+        return;
+      }
+      reject(new Error(`Unable to resume upload: ${request.status} ${request.responseText}`));
+    };
+
+    request.onerror = () => reject(new Error("Network error while checking upload resume status."));
+    request.send();
+  });
+}
+
+function nextByteFromRange(rangeHeader, fallback) {
+  const match = String(rangeHeader || "").match(/bytes=0-(\d+)/i);
+  return match ? Number(match[1]) + 1 : fallback;
 }
 
 async function driveAuthorizedRequest(path, accessToken, params = {}) {
@@ -1685,6 +1930,10 @@ function formatShortDate(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("en-US").format(value || 0);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function hashString(value) {
