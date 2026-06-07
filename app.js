@@ -8,6 +8,7 @@ const LOCAL_UPLOAD_CACHE_KEY = "ganeshUploadManifestCache";
 const RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024;
 const UPLOAD_RETRY_LIMIT = 3;
 const UPLOAD_RETRY_BASE_DELAY = 900;
+const RECENT_LIMIT = 1253;
 
 const state = {
   manifest: null,
@@ -340,7 +341,7 @@ async function loadData(options = {}) {
   }
   mergePersistedUploads(state.manifest);
   state.index = buildIndex(state.manifest);
-  if (state.selectedFolderId !== "all" && !state.index.folderById.has(state.selectedFolderId)) {
+  if (!isBuiltInView(state.selectedFolderId) && !state.index.folderById.has(state.selectedFolderId)) {
     state.selectedFolderId = "all";
   }
   state.visibleLimit = MEDIA_BATCH_SIZE;
@@ -1328,7 +1329,7 @@ function renderNavigation() {
     button.classList.toggle("is-active", state.selectedFolderId === button.dataset.folderId);
   });
   els.mobileHomeButton.classList.toggle("is-active", state.selectedFolderId === "all");
-  els.mobileFoldersButton.classList.toggle("is-active", state.selectedFolderId !== "all");
+  els.mobileFoldersButton.classList.toggle("is-active", isFolderView());
 }
 
 function renderFolderTree(parentId, depth) {
@@ -1361,14 +1362,14 @@ function renderStats() {
   els.statFolders.textContent = formatNumber(Math.max(state.manifest.folders.length - 1, 0));
   els.statLatest.textContent = latest ? formatShortDate(latest.modifiedTime) : "-";
   els.driveAllCount.textContent = formatNumber(items.length);
-  els.driveRecentCount.textContent = formatNumber(Math.min(items.length, 1253));
+  els.driveRecentCount.textContent = formatNumber(Math.min(items.length, RECENT_LIMIT));
   els.generatedLabel.textContent = `Updated ${formatDateTime(state.manifest.generatedAt)}`;
 }
 
 function renderContext() {
   const selected = getSelectedFolder();
-  const title = selected ? selected.name : "All Media";
-  const path = selected && selected.id !== state.manifest.root.id ? selected.path : "All Media";
+  const title = state.selectedFolderId === "recent" ? "Recent" : selected ? selected.name : "All Media";
+  const path = state.selectedFolderId === "recent" ? "Recent media" : selected && selected.id !== state.manifest.root.id ? selected.path : "All Media";
   els.contextTitle.textContent = title;
   els.breadcrumb.textContent = path;
 }
@@ -1378,6 +1379,7 @@ function renderMobileStrip() {
   const topFolders = state.index.childrenByParent.get(rootId) || [];
   const buttons = [
     quickFolderButton("all", "All", state.selectedFolderId === "all"),
+    quickFolderButton("recent", "Recent", state.selectedFolderId === "recent"),
     ...topFolders.map((folder) => quickFolderButton(folder.id, folder.name, state.selectedFolderId === folder.id))
   ];
   els.mobileFolderStrip.innerHTML = buttons.join("");
@@ -1388,7 +1390,7 @@ function quickFolderButton(id, name, active) {
 }
 
 function renderFolderCards() {
-  const selectedId = state.selectedFolderId === "all" ? state.manifest.root.id : state.selectedFolderId;
+  const selectedId = isBuiltInView(state.selectedFolderId) ? state.manifest.root.id : state.selectedFolderId;
   const children = state.index.childrenByParent.get(selectedId) || [];
 
   els.folderCards.innerHTML = children
@@ -1422,8 +1424,8 @@ function renderGallery() {
   const visible = items.slice(0, state.visibleLimit);
 
   els.resultCount.textContent = `${formatNumber(items.length)} results`;
-  els.resultTitle.textContent = state.selectedFolderId === "all" ? "Full library" : getSelectedFolder()?.name || "Gallery";
-  els.resultNote.textContent = `${formatNumber(items.length)} items | Sorted by ${state.sort === "oldest" ? "oldest date" : state.sort === "name" ? "name" : "date taken"}`;
+  els.resultTitle.textContent = galleryTitle();
+  els.resultNote.textContent = galleryResultNote(items);
 
   els.galleryGrid.innerHTML = visible.map(mediaCardHtml).join("");
   hydrateIconsIn(els.galleryGrid);
@@ -1462,6 +1464,11 @@ function renderEmptyState(items) {
 }
 
 function getFilteredItems() {
+  if (state.selectedFolderId === "recent") {
+    const recentItems = sortItems(state.manifest.items, "newest").slice(0, RECENT_LIMIT);
+    return state.query ? recentItems.filter((item) => itemMatchesQuery(item, state.query)) : recentItems;
+  }
+
   const selectedFolderIds =
     state.selectedFolderId === "all"
       ? new Set(state.manifest.folders.map((folder) => folder.id))
@@ -1477,11 +1484,78 @@ function getFilteredItems() {
       return true;
     }
 
-    const folder = state.index.folderById.get(item.folderId);
-    return `${item.name} ${folder?.name || ""} ${folder?.path || ""}`.toLowerCase().includes(query);
+    return itemMatchesQuery(item, query);
   });
 
+  if (shouldUseMixedHomeFeed()) {
+    return mixHomeItems(items);
+  }
+
   return sortItems(items, state.sort);
+}
+
+function itemMatchesQuery(item, query) {
+  const folder = state.index.folderById.get(item.folderId);
+  return `${item.name} ${folder?.name || ""} ${folder?.path || ""}`.toLowerCase().includes(query);
+}
+
+function shouldUseMixedHomeFeed() {
+  return state.selectedFolderId === "all" && !state.query && state.sort === "newest";
+}
+
+function mixHomeItems(items) {
+  const groups = new Map();
+  sortItems(items, "newest").forEach((item) => {
+    if (!groups.has(item.folderId)) {
+      groups.set(item.folderId, []);
+    }
+    groups.get(item.folderId).push(item);
+  });
+
+  const folderGroups = [...groups.entries()].sort(([, aItems], [, bItems]) => {
+    const latestDelta = getTime(bItems[0]?.modifiedTime) - getTime(aItems[0]?.modifiedTime);
+    if (latestDelta) {
+      return latestDelta;
+    }
+    const aFolder = state.index.folderById.get(aItems[0]?.folderId);
+    const bFolder = state.index.folderById.get(bItems[0]?.folderId);
+    return (aFolder?.name || "").localeCompare(bFolder?.name || "", "th");
+  });
+
+  const mixed = [];
+  let depth = 0;
+  let added = true;
+  while (added) {
+    added = false;
+    folderGroups.forEach(([, groupItems]) => {
+      if (groupItems[depth]) {
+        mixed.push(groupItems[depth]);
+        added = true;
+      }
+    });
+    depth += 1;
+  }
+  return mixed;
+}
+
+function galleryTitle() {
+  if (state.selectedFolderId === "all") {
+    return "Full library";
+  }
+  if (state.selectedFolderId === "recent") {
+    return "Recent";
+  }
+  return getSelectedFolder()?.name || "Gallery";
+}
+
+function galleryResultNote(items) {
+  if (state.selectedFolderId === "recent") {
+    return `${formatNumber(items.length)} latest items | Sorted by date taken`;
+  }
+  if (shouldUseMixedHomeFeed()) {
+    return `${formatNumber(items.length)} items | Mixed from all folders`;
+  }
+  return `${formatNumber(items.length)} items | Sorted by ${state.sort === "oldest" ? "oldest date" : state.sort === "name" ? "name" : "date taken"}`;
 }
 
 function sortItems(items, sortMode) {
@@ -1560,8 +1634,16 @@ function selectFolder(folderId) {
   els.mainView?.scrollTo?.({ top: 0, behavior: "smooth" });
 }
 
+function isBuiltInView(folderId) {
+  return folderId === "all" || folderId === "recent";
+}
+
+function isFolderView() {
+  return !isBuiltInView(state.selectedFolderId);
+}
+
 function getSelectedFolder() {
-  if (state.selectedFolderId === "all") {
+  if (isBuiltInView(state.selectedFolderId)) {
     return null;
   }
   return state.index.folderById.get(state.selectedFolderId);
